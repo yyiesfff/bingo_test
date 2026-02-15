@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>2026 🐎 福驍賀歲賓果系統 V19.0 - 實時多人版</title>
     
-    <!-- [Firebase SDK - 使用 v8.x 穩定版本（支持全局 firebase 對象）] -->
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <!-- [Firebase 使用 REST API - 無需 SDK] -->
     
     <style>
         /* [CONFIG - 設定中心] */
@@ -502,7 +500,7 @@
         [模組 1: 跨裝置實時同步系統 - Firebase Realtime Database]
        ============================================================ */
     
-    // Firebase 配置 (使用公開測試數據庫，建議替換為你自己的)
+    // Firebase 配置 (使用 REST API)
     const firebaseConfig = {
         apiKey: "AIzaSyB3OFFjxXqOniYRX9bPW122a2w99hzhJz8",
         authDomain: "bingo-game-18d7c.firebaseapp.com",
@@ -514,36 +512,24 @@
         measurementId: "G-MV7DWYF5T5"
     };
 
-    // 初始化 Firebase (如果使用開發模式，先不初始化)
+    // 初始化 Firebase (使用 REST API，無需 SDK)
     let firebaseInitialized = false;
-    let db = null;
     
     function initFirebase() {
         try {
-            // 檢查 Firebase SDK 是否加載
-            if (typeof firebase === 'undefined') {
-                console.error('❌ Firebase SDK 未加載 - 檢查網路連線或 CDN');
-                return;
-            }
-            
-            // Firebase 配置有效就初始化（包括 localhost）
-            // 這樣可以在開發環境中進行跨瀏覽器測試
-            if (firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith('AIzaSyDp_1234567890')) {
+            // REST API 無需 SDK，直接檢查配置有效性
+            if (firebaseConfig.apiKey && firebaseConfig.databaseURL && !firebaseConfig.apiKey.startsWith('AIzaSyDp_1234567890')) {
+                firebaseInitialized = true;
+                console.log('✅ Firebase REST API 已就緒 - 支持跨瀏覽器同步');
                 console.log('📝 Firebase 配置:', {
                     projectId: firebaseConfig.projectId,
                     databaseURL: firebaseConfig.databaseURL
                 });
-                
-                firebase.initializeApp(firebaseConfig);
-                db = firebase.database();
-                firebaseInitialized = true;
-                console.log('✅ Firebase 已初始化 - 支持跨瀏覽器同步');
             } else {
                 console.log('⚠️ Firebase 配置無效 - 只能使用本地模式 (同一瀏覽器內)');
             }
         } catch (error) {
             console.error('❌ Firebase 初始化失敗:', error.message);
-            console.error('錯誤詳情:', error);
             console.log('🔄 降級為本地模式 (LocalStorage)');
         }
     }
@@ -636,45 +622,57 @@
             }
         },
 
-        /* [模組 5: FIREBASE 同步] */
+        /* [模組 5: FIREBASE REST API 同步] */
         Firebase: {
-            // 同步遊戲狀態到雲端
+            // 同步遊戲狀態到雲端 (使用 REST API)
             syncToCloud: async (sessionId) => {
-                if (!firebaseInitialized || !db) return;
+                if (!firebaseInitialized) return;
                 
                 try {
-                    // 先從 Firebase 讀取現有的玩家列表，確保不會覆蓋其他玩家
-                    const snapshot = await db.ref(`games/${sessionId}/participants`).once('value');
-                    const existingParticipants = snapshot.val() || {};
-                    
-                    // 合併現有玩家與當前玩家（當前玩家會覆蓋同名玩家的舊數據）
-                    const mergedParticipants = { ...existingParticipants, ...App.State.participants };
+                    const url = `${firebaseConfig.databaseURL}/games/${sessionId}.json`;
                     
                     const gameData = {
                         gameSessionId: sessionId,
                         sharedDrawnNums: App.State.sharedDrawnNums,
                         sharedDrawPool: App.State.sharedDrawPool,
                         gameOver: App.State.gameOver,
-                        participants: mergedParticipants,
+                        participants: App.State.participants,
                         updatedAt: new Date().toISOString()
                     };
                     
-                    await db.ref(`games/${sessionId}`).set(gameData);
+                    const response = await fetch(url, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(gameData)
+                    });
+                    
+                    if (response.ok) {
+                        console.log('✅ 遊戲狀態已同步到 Firebase');
+                    } else {
+                        console.warn('⚠️ Firebase 同步回應異常:', response.status);
+                    }
                 } catch (error) {
-                    console.log('雲端同步失敗:', error);
+                    console.log('⚠️ Firebase 雲端同步失敗 (降級為本地模式):', error.message);
                 }
             },
             
-            // 監聽遠程遊戲狀態變化
+            // 監聽遠程遊戲狀態變化 (定期輪詢 REST API)
             listenToGameChanges: (sessionId) => {
-                if (!firebaseInitialized || !db) return;
+                if (!firebaseInitialized) return;
                 
-                const ref = db.ref(`games/${sessionId}`);
-                const listener = ref.on('value', (snapshot) => {
-                    const remoteData = snapshot.val();
-                    if (remoteData && remoteData.updatedAt) {
+                // 每 2 秒檢查一次遠程數據
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const url = `${firebaseConfig.databaseURL}/games/${sessionId}.json`;
+                        const response = await fetch(url);
+                        
+                        if (!response.ok) return;
+                        
+                        const remoteData = await response.json();
+                        if (!remoteData) return;
+                        
                         // 檢查是否是別人的更新
-                        if (remoteData.sharedDrawnNums.length > App.State.sharedDrawnNums.length) {
+                        if (remoteData.sharedDrawnNums && remoteData.sharedDrawnNums.length > App.State.sharedDrawnNums.length) {
                             // 有新的號碼被抽取
                             const newNum = remoteData.sharedDrawnNums[remoteData.sharedDrawnNums.length - 1];
                             App.State.sharedDrawnNums = remoteData.sharedDrawnNums;
@@ -696,27 +694,43 @@
                         if (remoteData.gameOver) {
                             App.State.gameOver = true;
                         }
+                    } catch (error) {
+                        // 輪詢錯誤不強行中止，只記錄
+                        console.log('📡 Firebase 輪詢錯誤（可忽略）:', error.message);
                     }
-                });
+                }, 2000);
                 
-                App.State.syncListeners.push(() => ref.off('value', listener));
+                App.State.syncListeners.push(() => clearInterval(pollInterval));
             },
             
-            // 監聽玩家列表
+            // 監聽玩家列表 (定期輪詢 REST API)
             listenToPlayers: (sessionId) => {
-                if (!firebaseInitialized || !db) return;
+                if (!firebaseInitialized) return;
                 
-                const ref = db.ref(`games/${sessionId}/participants`);
-                const listener = ref.on('value', (snapshot) => {
-                    const remoteParticipants = snapshot.val();
-                    if (remoteParticipants) {
+                // 每 1 秒檢查一次玩家列表
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const url = `${firebaseConfig.databaseURL}/games/${sessionId}/participants.json`;
+                        const response = await fetch(url);
+                        
+                        if (!response.ok) return;
+                        
+                        const remoteParticipants = await response.json();
+                        if (!remoteParticipants) return;
+                        
                         // 合併而不是直接替換，保留本地玩家並更新遠程玩家
-                        const mergedParticipants = { ...App.State.participants, ...remoteParticipants };
-                        App.State.participants = mergedParticipants;
+                        const mergedParticipants = { ...remoteParticipants, ...App.State.participants };
+                        if (JSON.stringify(mergedParticipants) !== JSON.stringify(App.State.participants)) {
+                            App.State.participants = mergedParticipants;
+                            App.Actions.updatePlayersList();
+                        }
+                    } catch (error) {
+                        // 輪詢錯誤不強行中止
+                        console.log('📡 玩家列表輪詢錯誤（可忽略）:', error.message);
                     }
-                });
+                }, 1000);
                 
-                App.State.syncListeners.push(() => ref.off('value', listener));
+                App.State.syncListeners.push(() => clearInterval(pollInterval));
             }
         },
 
@@ -918,16 +932,21 @@
                 }
                 
                 // 如果 Firebase 已初始化，先驗證 session 是否存在
-                if (firebaseInitialized && db) {
-                    db.ref(`games/${sessionId}`).once('value', (snapshot) => {
-                        if (snapshot.exists()) {
-                            console.log('✅ 會話驗證成功 - 已連接到遠端遊戲');
+                if (firebaseInitialized) {
+                    fetch(`${firebaseConfig.databaseURL}/games/${sessionId}.json`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data) {
+                                console.log('✅ 會話驗證成功 - 已連接到遠端遊戲');
+                            } else {
+                                console.log('⚠️ Firebase 中無此會話，但會創建新的遠端會話');
+                            }
                             App.Actions.loginAsUser(username, sessionId);
-                        } else {
-                            console.log('⚠️ Firebase 中無此會話，但會創建新的遠端會話');
+                        })
+                        .catch(err => {
+                            console.log('⚠️ 會話驗證失敗（降級為本地模式）:', err.message);
                             App.Actions.loginAsUser(username, sessionId);
-                        }
-                    });
+                        });
                 } else {
                     // Firebase 未初始化時的警告提示
                     alert('⚠️ 提示：Firebase 未初始化，跨瀏覽器同步功能可能受限\n\n如需跨瀏覽器同步，請確保在聯網環境下使用');
@@ -971,22 +990,28 @@
                 App.State.sharedDrawnNums = sharedState.drawnNums;
                 
                 // 如果使用 Firebase，先從 Firebase 讀取現有玩家（確保不會遺漏其他瀏覽器的玩家）
-                if (firebaseInitialized && db) {
-                    db.ref(`games/${App.State.gameSessionId}/participants`).once('value', (snapshot) => {
-                        const firebaseParticipants = snapshot.val();
-                        if (firebaseParticipants) {
-                            // 合併 Firebase 的玩家與本地玩家（本地的會覆蓋 Firebase 的同名玩家）
-                            App.State.participants = { ...firebaseParticipants, ...App.State.participants };
-                        }
-                        // 保存更新後的玩家列表到 localStorage（傳入 sessionId）
-                        App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
-                        // 上傳合併後的完整玩家列表到 Firebase
-                        App.Firebase.syncToCloud(App.State.gameSessionId);
-                        // 延遲 100ms 後重新渲染玩家列表，確保 UI 能顯示從 Firebase 加載的玩家
-                        setTimeout(() => {
-                            App.Actions.updatePlayersList();
-                        }, 100);
-                    });
+                if (firebaseInitialized) {
+                    fetch(`${firebaseConfig.databaseURL}/games/${App.State.gameSessionId}/participants.json`)
+                        .then(res => res.json())
+                        .then(firebaseParticipants => {
+                            if (firebaseParticipants) {
+                                // 合併 Firebase 的玩家與本地玩家（本地的會覆蓋 Firebase 的同名玩家）
+                                App.State.participants = { ...firebaseParticipants, ...App.State.participants };
+                            }
+                            // 保存更新後的玩家列表到 localStorage（傳入 sessionId）
+                            App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
+                            // 上傳合併後的完整玩家列表到 Firebase
+                            App.Firebase.syncToCloud(App.State.gameSessionId);
+                            // 延遲 100ms 後重新渲染玩家列表，確保 UI 能顯示從 Firebase 加載的玩家
+                            setTimeout(() => {
+                                App.Actions.updatePlayersList();
+                            }, 100);
+                        })
+                        .catch(err => {
+                            console.log('⚠️ Firebase 讀取玩家失敗（使用本地數據）:', err.message);
+                            // 保存到 localStorage（傳入 sessionId）
+                            App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
+                        });
                     
                     // 設置實時監聽（用於後續的實時更新）
                     App.Firebase.listenToGameChanges(App.State.gameSessionId);
