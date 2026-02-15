@@ -103,6 +103,79 @@
             box-shadow: 0 2px 0 var(--dark-gold);
         }
         
+        /* [UI - 會話 ID 輸入分隔] */
+        .login-divider {
+            margin: 20px 0;
+            text-align: center;
+            color: var(--gold);
+            font-size: 12px;
+            position: relative;
+        }
+        
+        .login-divider::before,
+        .login-divider::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            width: 35%;
+            height: 1px;
+            background: var(--gold);
+        }
+        
+        .login-divider::before {
+            left: 0;
+        }
+        
+        .login-divider::after {
+            right: 0;
+        }
+        
+        .session-input {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            border: 2px solid var(--gold);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: var(--gold);
+            font-size: 14px;
+            box-sizing: border-box;
+            font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+        }
+        
+        .session-input::placeholder {
+            color: rgba(255,207,51,0.5);
+        }
+        
+        .session-input:focus {
+            outline: none;
+            box-shadow: 0 0 15px rgba(255,207,51,0.5);
+            background: rgba(255,255,255,0.15);
+        }
+        
+        .session-btn {
+            width: 100%;
+            padding: 10px;
+            background: rgba(255,207,51,0.2);
+            border: 1px solid var(--gold);
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--gold);
+            cursor: pointer;
+            transition: 0.2s;
+            font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+            margin-bottom: 15px;
+        }
+        
+        .session-btn:hover {
+            background: rgba(255,207,51,0.3);
+        }
+        
+        .session-btn:active {
+            transform: scale(0.95);
+        }
+        
         .previous-users {
             margin-top: 30px;
             width: 100%;
@@ -329,6 +402,18 @@
             >
             <button class="login-btn" onclick="App.Actions.login()">進入遊戲 🎮</button>
             
+            <!-- 輸入會話 ID 區塊 -->
+            <div class="login-divider">或</div>
+            <p style="color: var(--gold); margin: 10px 0; font-size: 12px;">輸入會話 ID 加入現存遊戲</p>
+            <input 
+                type="text" 
+                class="session-input" 
+                id="sessionIdInput" 
+                placeholder="貼上會話 ID (例: session_xxx)" 
+                onkeypress="if(event.key==='Enter') App.Actions.joinBySessionId()"
+            >
+            <button class="session-btn" onclick="App.Actions.joinBySessionId()">🎯 加入遊戲</button>
+            
             <div class="previous-users" id="previousUsersContainer" style="display:none;">
                 <div class="previous-users-title">📋 最近玩家</div>
                 <div id="previousUsersList"></div>
@@ -540,12 +625,19 @@
                 if (!firebaseInitialized || !db) return;
                 
                 try {
+                    // 先從 Firebase 讀取現有的玩家列表，確保不會覆蓋其他玩家
+                    const snapshot = await db.ref(`games/${sessionId}/participants`).once('value');
+                    const existingParticipants = snapshot.val() || {};
+                    
+                    // 合併現有玩家與當前玩家（當前玩家會覆蓋同名玩家的舊數據）
+                    const mergedParticipants = { ...existingParticipants, ...App.State.participants };
+                    
                     const gameData = {
                         gameSessionId: sessionId,
                         sharedDrawnNums: App.State.sharedDrawnNums,
                         sharedDrawPool: App.State.sharedDrawPool,
                         gameOver: App.State.gameOver,
-                        participants: App.State.participants,
+                        participants: mergedParticipants,
                         updatedAt: new Date().toISOString()
                     };
                     
@@ -600,7 +692,9 @@
                 const listener = ref.on('value', (snapshot) => {
                     const remoteParticipants = snapshot.val();
                     if (remoteParticipants) {
-                        App.State.participants = remoteParticipants;
+                        // 合併而不是直接替換，保留本地玩家並更新遠程玩家
+                        const mergedParticipants = { ...App.State.participants, ...remoteParticipants };
+                        App.State.participants = mergedParticipants;
                     }
                 });
                 
@@ -783,6 +877,29 @@
                 App.Actions.loginAsUser(username, sessionId);
             },
             
+            joinBySessionId: () => {
+                const username = document.getElementById('usernameInput').value.trim();
+                const sessionId = document.getElementById('sessionIdInput').value.trim();
+                
+                if (!username) {
+                    alert('請輸入你的名稱');
+                    return;
+                }
+                if (!sessionId) {
+                    alert('請輸入會話 ID');
+                    return;
+                }
+                
+                // 驗證會話 ID 格式
+                if (!sessionId.startsWith('session_')) {
+                    alert('會話 ID 格式不正確 (應該以 session_ 開頭)');
+                    return;
+                }
+                
+                // 加入指定的遊戲會話
+                App.Actions.loginAsUser(username, sessionId);
+            },
+            
             loginAsUser: (username, sessionId = null) => {
                 App.State.currentUser = username;
                 App.State.gameSessionId = sessionId || App.Utils.generateSessionId();
@@ -811,9 +928,6 @@
                     };
                 }
                 
-                // 保存更新後的玩家列表
-                App.Storage.saveParticipants(App.State.participants);
-                
                 // 加載共享遊戲狀態
                 const sharedState = App.Storage.loadSharedState();
                 App.State.sharedDrawPool = sharedState.drawPool.length > 0 ? 
@@ -821,11 +935,26 @@
                     App.Utils.shuffle(Array.from({length: App.Config.MAX_NUM}, (_, i) => i + 1));
                 App.State.sharedDrawnNums = sharedState.drawnNums;
                 
-                // 設置 Firebase 監聽 (跨裝置同步)
-                if (firebaseInitialized) {
+                // 如果使用 Firebase，先從 Firebase 讀取現有玩家（確保不會遺漏其他瀏覽器的玩家）
+                if (firebaseInitialized && db) {
+                    db.ref(`games/${App.State.gameSessionId}/participants`).once('value', (snapshot) => {
+                        const firebaseParticipants = snapshot.val();
+                        if (firebaseParticipants) {
+                            // 合併 Firebase 的玩家與本地玩家（本地的會覆蓋 Firebase 的同名玩家）
+                            App.State.participants = { ...firebaseParticipants, ...App.State.participants };
+                        }
+                        // 保存更新後的玩家列表到 localStorage
+                        App.Storage.saveParticipants(App.State.participants);
+                        // 上傳合併後的完整玩家列表到 Firebase
+                        App.Firebase.syncToCloud(App.State.gameSessionId);
+                    });
+                    
+                    // 設置實時監聽（用於後續的實時更新）
                     App.Firebase.listenToGameChanges(App.State.gameSessionId);
                     App.Firebase.listenToPlayers(App.State.gameSessionId);
-                    App.Firebase.syncToCloud(App.State.gameSessionId);
+                } else {
+                    // 如果沒有 Firebase，只保存到 localStorage
+                    App.Storage.saveParticipants(App.State.participants);
                 }
                 
                 App.UI.showGameView();
@@ -918,6 +1047,12 @@
                 const playersList = document.getElementById('playersList');
                 const playersContainer = document.getElementById('playersContainer');
                 const playerCount = document.getElementById('playerCount');
+                
+                // 從 localStorage 重新讀取最新的玩家列表（確保同步其他分頁的變化）
+                const latestParticipants = App.Storage.loadParticipants();
+                if (Object.keys(latestParticipants).length > 0) {
+                    App.State.participants = latestParticipants;
+                }
                 
                 const players = Object.keys(App.State.participants);
                 playerCount.textContent = players.length;
