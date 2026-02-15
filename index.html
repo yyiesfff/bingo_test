@@ -624,10 +624,10 @@
 
         /* [模組 5: FIREBASE REST API 同步] */
         Firebase: {
-            // 構建 Firebase REST API URL（包含 API Key）
+            // 構建 Firebase REST API URL（無需認證，規則已允許公開訪問）
             buildUrl: (path) => {
                 const baseUrl = firebaseConfig.databaseURL;
-                return `${baseUrl}/${path}.json?auth=${firebaseConfig.apiKey}`;
+                return `${baseUrl}/${path}.json`;
             },
             
             // 同步遊戲狀態到雲端 (使用 REST API)
