@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>2026 🐎 福驍賀歲賓果系統 V19.0 - 實時多人版</title>
     
-    <!-- [Firebase SDK] -->
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js"></script>
+    <!-- [Firebase SDK - 使用兼容浏览器的版本] -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js"></script>
     
     <style>
         /* [CONFIG - 設定中心] */
@@ -520,9 +520,20 @@
     
     function initFirebase() {
         try {
+            // 檢查 Firebase SDK 是否加載
+            if (typeof firebase === 'undefined') {
+                console.error('❌ Firebase SDK 未加載 - 檢查網路連線或 CDN');
+                return;
+            }
+            
             // Firebase 配置有效就初始化（包括 localhost）
             // 這樣可以在開發環境中進行跨瀏覽器測試
             if (firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith('AIzaSyDp_1234567890')) {
+                console.log('📝 Firebase 配置:', {
+                    projectId: firebaseConfig.projectId,
+                    databaseURL: firebaseConfig.databaseURL
+                });
+                
                 firebase.initializeApp(firebaseConfig);
                 db = firebase.database();
                 firebaseInitialized = true;
@@ -531,7 +542,9 @@
                 console.log('⚠️ Firebase 配置無效 - 只能使用本地模式 (同一瀏覽器內)');
             }
         } catch (error) {
-            console.log('❌ Firebase 初始化失敗，使用本地模式:', error);
+            console.error('❌ Firebase 初始化失敗:', error.message);
+            console.error('錯誤詳情:', error);
+            console.log('🔄 降級為本地模式 (LocalStorage)');
         }
     }
     
