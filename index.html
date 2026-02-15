@@ -180,6 +180,78 @@
         .logout-btn:hover {
             background: rgba(255,207,51,0.3);
         }
+        
+        /* [UI - 遊戲會話資訊] */
+        .session-info {
+            background: rgba(179,0,0,0.3);
+            border: 1px solid var(--gold);
+            border-radius: 8px;
+            padding: 12px;
+            margin: 15px 0;
+            width: var(--aligned-width);
+            box-sizing: border-box;
+            text-align: center;
+            font-size: 12px;
+        }
+        
+        .session-id {
+            background: rgba(0,0,0,0.5);
+            padding: 6px 8px;
+            border-radius: 4px;
+            margin: 8px 0;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+            cursor: pointer;
+            user-select: all;
+        }
+        
+        .session-id:hover {
+            background: rgba(255,207,51,0.2);
+        }
+        
+        .copy-btn {
+            background: rgba(255,207,51,0.2);
+            border: 1px solid var(--gold);
+            color: var(--gold);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-left: 8px;
+            transition: 0.2s;
+        }
+        
+        .copy-btn:hover {
+            background: rgba(255,207,51,0.4);
+        }
+        
+        .players-list {
+            background: rgba(0,0,0,0.4);
+            border: 1px solid var(--gold);
+            border-radius: 8px;
+            padding: 10px;
+            margin: 15px 0;
+            width: var(--aligned-width);
+            box-sizing: border-box;
+        }
+        
+        .players-title {
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: var(--gold);
+        }
+        
+        .player-item {
+            background: rgba(255,207,51,0.1);
+            padding: 6px 8px;
+            margin-bottom: 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
 
         /* [UI - 重新開始鍵] 對齊 25 格寬度 (65%) */
         .main-btn { 
@@ -304,6 +376,20 @@
         <div class="view-section" style="margin-top:20px;">
             <h1 style="color:var(--gold); margin:0;">🧧 財 🧧</h1>
             
+            <!-- 遊戲會話資訊 -->
+            <div class="session-info">
+                <div style="margin-bottom: 8px;">📌 遊戲會話</div>
+                <div class="session-id" id="sessionIdDisplay" title="點擊複製">載入中...</div>
+                <button class="copy-btn" onclick="App.Actions.copySessionId()">📋 複製</button>
+                <div style="margin-top: 6px; font-size: 11px; color: rgba(255,207,51,0.7);">分享會話 ID 給其他玩家加入本局</div>
+            </div>
+            
+            <!-- 線上玩家列表 -->
+            <div class="players-list" id="playersList" style="display: none;">
+                <div class="players-title">👥 線上玩家 (<span id="playerCount">1</span>)</div>
+                <div id="playersContainer"></div>
+            </div>
+            
             <div class="current-num" id="displayNum">?</div>
 
             <div id="actionArea" style="display:flex; flex-direction:column; align-items:center;">
@@ -333,13 +419,14 @@
     
     // Firebase 配置 (使用公開測試數據庫，建議替換為你自己的)
     const firebaseConfig = {
-        apiKey: "AIzaSyDp_1234567890abcdefghijklmnopqrst",
-        authDomain: "bingo-game-sync.firebaseapp.com",
-        databaseURL: "https://bingo-game-sync-default-rtdb.firebaseio.com",
-        projectId: "bingo-game-sync",
-        storageBucket: "bingo-game-sync.appspot.com",
-        messagingSenderId: "123456789012",
-        appId: "1:123456789012:web:abcdefghijklmnopqrst"
+        apiKey: "AIzaSyB3OFFjxXqOniYRX9bPW122a2w99hzhJz8",
+        authDomain: "bingo-game-18d7c.firebaseapp.com",
+        databaseURL: "https://bingo-game-18d7c-default-rtdb.firebaseio.com",
+        projectId: "bingo-game-18d7c",
+        storageBucket: "bingo-game-18d7c.firebasestorage.app",
+        messagingSenderId: "123802679742",
+        appId: "1:123802679742:web:9a6968e831b2f8cda2a1ef",
+        measurementId: "G-MV7DWYF5T5"
     };
 
     // 初始化 Firebase (如果使用開發模式，先不初始化)
@@ -374,7 +461,8 @@
             isAnimating: false,
             gameOver: false,
             gameSessionId: null,  // 當前遊戲會話 ID
-            syncListeners: []      // 存儲 Firebase 監聽器以便清理
+            syncListeners: [],    // 存儲 Firebase 監聽器以便清理
+            playerListInterval: null  // 玩家列表更新的间隔 ID
         },
 
         /* [模組 3: UTILS - 工具箱] */
@@ -433,7 +521,15 @@
             },
             
             loadSharedState: () => {
-                return JSON.parse(localStorage.getItem('bingo_shared_state') || '{"drawnNums":[], "drawPool":[]}');
+                return JSON.parse(localStorage.getItem('bingo_shared_state') || '{"drawnNums":[], "drawPool":[], "participants":{}}');
+            },
+            
+            saveParticipants: (participants) => {
+                localStorage.setItem('bingo_participants', JSON.stringify(participants));
+            },
+            
+            loadParticipants: () => {
+                return JSON.parse(localStorage.getItem('bingo_participants') || '{}');
             }
         },
 
@@ -530,6 +626,12 @@
                 document.getElementById('loginView').classList.add('hidden');
                 document.getElementById('gameView').classList.remove('hidden');
                 document.getElementById('currentUsername').textContent = App.State.currentUser;
+                
+                // 顯示遊戲會話 ID
+                document.getElementById('sessionIdDisplay').textContent = App.State.gameSessionId;
+                
+                // 定期更新玩家列表
+                App.Actions.updatePlayersList();
             },
             
             updatePreviousUsers: () => {
@@ -574,8 +676,12 @@
                 // 保存共享狀態到本地存儲
                 App.Storage.saveSharedState({
                     drawnNums: App.State.sharedDrawnNums,
-                    drawPool: App.State.sharedDrawPool
+                    drawPool: App.State.sharedDrawPool,
+                    participants: App.State.participants
                 });
+                
+                // 保存玩家列表（分開存儲以便跨分頁監聽）
+                App.Storage.saveParticipants(App.State.participants);
                 
                 // 保存當前用戶的遊戲數據
                 if (App.State.currentUser && App.State.participants[App.State.currentUser]) {
@@ -612,8 +718,9 @@
                 
                 // 監聽 localStorage 變化（跨分頁同步）
                 window.addEventListener('storage', (event) => {
+                    // 監聽共享遊戲狀態變化
                     if (event.key === 'bingo_shared_state') {
-                        const remoteState = JSON.parse(event.newValue || '{"drawnNums":[], "drawPool":[]}');
+                        const remoteState = JSON.parse(event.newValue || '{"drawnNums":[], "drawPool":[], "participants":{}}');
                         // 檢查遊戲狀態是否有任何變化（包括清空、增加、減少）
                         if (JSON.stringify(remoteState.drawnNums) !== JSON.stringify(App.State.sharedDrawnNums)) {
                             App.State.sharedDrawnNums = remoteState.drawnNums;
@@ -639,6 +746,21 @@
                             }
                             
                             App.Core.checkWin();
+                        }
+                        
+                        // 同步玩家列表
+                        if (remoteState.participants && JSON.stringify(remoteState.participants) !== JSON.stringify(App.State.participants)) {
+                            App.State.participants = remoteState.participants;
+                            App.Actions.updatePlayersList();
+                        }
+                    }
+                    
+                    // 監聽玩家列表變化
+                    if (event.key === 'bingo_participants') {
+                        const remoteParticipants = JSON.parse(event.newValue || '{}');
+                        if (JSON.stringify(remoteParticipants) !== JSON.stringify(App.State.participants)) {
+                            App.State.participants = remoteParticipants;
+                            App.Actions.updatePlayersList();
                         }
                     }
                 });
@@ -671,6 +793,12 @@
                 localStorage.setItem('bingo_session_id', App.State.gameSessionId);
                 App.Storage.saveUser(username);
                 
+                // 加載所有玩家列表（包括其他分頁的玩家）
+                const allParticipants = App.Storage.loadParticipants();
+                if (Object.keys(allParticipants).length > 0) {
+                    App.State.participants = allParticipants;
+                }
+                
                 // 加載該用戶的遊戲數據或創建新遊戲
                 const existingGame = App.Storage.loadGame(username);
                 if (existingGame) {
@@ -682,6 +810,9 @@
                         winCount: 0
                     };
                 }
+                
+                // 保存更新後的玩家列表
+                App.Storage.saveParticipants(App.State.participants);
                 
                 // 加載共享遊戲狀態
                 const sharedState = App.Storage.loadSharedState();
@@ -700,8 +831,16 @@
                 App.UI.showGameView();
                 App.Actions.renderBoard();
                 App.Actions.renderHistory();
+                App.Actions.updatePlayersList();
                 // 標記所有已抽的號碼
                 App.Actions.markDrawnNumbers();
+                
+                // 定期更新玩家列表
+                if (!App.State.playerListInterval) {
+                    App.State.playerListInterval = setInterval(() => {
+                        App.Actions.updatePlayersList();
+                    }, 1000);
+                }
             },
             
             logout: () => {
@@ -709,12 +848,38 @@
                 App.State.syncListeners.forEach(cleanup => cleanup());
                 App.State.syncListeners = [];
                 
+                // 清理玩家列表更新的間隔
+                if (App.State.playerListInterval) {
+                    clearInterval(App.State.playerListInterval);
+                    App.State.playerListInterval = null;
+                }
+                
+                // 從參與者列表中移除當前玩家
+                if (App.State.currentUser && App.State.participants[App.State.currentUser]) {
+                    delete App.State.participants[App.State.currentUser];
+                    // 保存更新後的列表（觸發其他分頁同步）
+                    App.Storage.saveParticipants(App.State.participants);
+                }
+                
                 // 清除當前玩家的 sessionStorage（但保留 localStorage 的 sessionId）
                 sessionStorage.removeItem('bingo_current_user');
                 App.State.currentUser = null;
                 document.getElementById('usernameInput').value = '';
                 App.UI.updatePreviousUsers();
                 App.UI.showLoginView();
+            },
+            
+            copySessionId: () => {
+                const sessionId = App.State.gameSessionId;
+                navigator.clipboard.writeText(sessionId).then(() => {
+                    alert(`✅ 已複製會話 ID！\n\n${sessionId}\n\n分享給其他玩家即可同步遊戲`);
+                }).catch(() => {
+                    // 備選方案
+                    const elem = document.getElementById('sessionIdDisplay');
+                    elem.select();
+                    document.execCommand('copy');
+                    alert('✅ 已複製會話 ID！');
+                });
             },
             
             renderBoard: () => {
@@ -749,6 +914,32 @@
                 App.State.sharedDrawnNums.forEach(n => App.UI.updateHistory(n));
             },
             
+            updatePlayersList: () => {
+                const playersList = document.getElementById('playersList');
+                const playersContainer = document.getElementById('playersContainer');
+                const playerCount = document.getElementById('playerCount');
+                
+                const players = Object.keys(App.State.participants);
+                playerCount.textContent = players.length;
+                
+                if (players.length > 0) {
+                    playersList.style.display = 'block';
+                    playersContainer.innerHTML = '';
+                    
+                    players.forEach(player => {
+                        const participantData = App.State.participants[player];
+                        const lines = participantData.winCount || 0;
+                        const playerItem = document.createElement('div');
+                        playerItem.className = 'player-item';
+                        playerItem.innerHTML = `
+                            <span>👤 ${player}</span>
+                            <span style="color: #ffcf33;">🏆 ${lines} 線</span>
+                        `;
+                        playersContainer.appendChild(playerItem);
+                    });
+                }
+            },
+            
             markDrawnNumbers: () => {
                 // 標記棋盤上所有已抽的號碼
                 App.State.sharedDrawnNums.forEach(n => {
@@ -768,7 +959,7 @@
 
                 let t = setInterval(() => { 
                     document.getElementById('displayNum').textContent = App.Utils.fmt(Math.floor(Math.random()*App.Config.MAX_NUM+1)); 
-                }, 125);
+                }, 100);
 
                 setTimeout(() => {
                     clearInterval(t);
@@ -794,7 +985,7 @@
                         App.State.gameOver = true;
                         alert('本局已經全部開完！🎉');
                     }
-                }, 4000); 
+                }, 2000); 
             },
             
             newGame: () => {
@@ -802,12 +993,14 @@
                 App.State.syncListeners.forEach(cleanup => cleanup());
                 App.State.syncListeners = [];
                 
-                // 重置當前用戶的個人遊戲狀態
-                App.State.participants[App.State.currentUser] = {
-                    board: App.Utils.shuffle(Array.from({length: App.Config.MAX_NUM}, (_, i) => i+1)).slice(0, 24),
-                    drawnNums: [],
-                    winCount: 0
-                };
+                // 重置所有玩家的遊戲狀態（新遊戲時所有玩家一起重新開始）
+                Object.keys(App.State.participants).forEach(playerName => {
+                    App.State.participants[playerName] = {
+                        board: App.Utils.shuffle(Array.from({length: App.Config.MAX_NUM}, (_, i) => i+1)).slice(0, 24),
+                        drawnNums: [],
+                        winCount: 0
+                    };
+                });
                 
                 // 重置共享遊戲狀態（但保留相同的 sessionId，所有玩家一起重新開始）
                 App.State.sharedDrawPool = App.Utils.shuffle(Array.from({length: App.Config.MAX_NUM}, (_, i) => i + 1));
@@ -818,8 +1011,12 @@
                 // 立即保存到 localStorage，觸發跨分頁同步
                 App.Storage.saveSharedState({
                     drawnNums: App.State.sharedDrawnNums,
-                    drawPool: App.State.sharedDrawPool
+                    drawPool: App.State.sharedDrawPool,
+                    participants: App.State.participants
                 });
+                
+                // 保存玩家列表
+                App.Storage.saveParticipants(App.State.participants);
                 
                 App.Core.syncGameState();
                 
@@ -834,6 +1031,7 @@
                 // 明確清空已開號碼紀錄
                 document.getElementById('historyList').innerHTML = '';
                 App.Actions.renderHistory();
+                App.Actions.updatePlayersList();
                 document.getElementById('displayNum').textContent = '?';
             }
         }
