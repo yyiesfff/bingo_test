@@ -520,17 +520,18 @@
     
     function initFirebase() {
         try {
-            // 只在非 localhost 或有有效配置時初始化
-            if (window.location.hostname !== 'localhost' && firebaseConfig.apiKey !== 'AIzaSyDp_1234567890abcdefghijklmnopqrst') {
+            // Firebase 配置有效就初始化（包括 localhost）
+            // 這樣可以在開發環境中進行跨瀏覽器測試
+            if (firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith('AIzaSyDp_1234567890')) {
                 firebase.initializeApp(firebaseConfig);
                 db = firebase.database();
                 firebaseInitialized = true;
-                console.log('Firebase 已初始化');
+                console.log('✅ Firebase 已初始化 - 支持跨瀏覽器同步');
             } else {
-                console.log('使用本地模式 (LocalStorage 同步)');
+                console.log('⚠️ Firebase 配置無效 - 只能使用本地模式 (同一瀏覽器內)');
             }
         } catch (error) {
-            console.log('Firebase 初始化失敗，使用本地模式:', error);
+            console.log('❌ Firebase 初始化失敗，使用本地模式:', error);
         }
     }
     
@@ -609,12 +610,16 @@
                 return JSON.parse(localStorage.getItem('bingo_shared_state') || '{"drawnNums":[], "drawPool":[], "participants":{}}');
             },
             
-            saveParticipants: (participants) => {
-                localStorage.setItem('bingo_participants', JSON.stringify(participants));
+            saveParticipants: (participants, sessionId = null) => {
+                // 按 Session ID 分開存儲玩家列表，避免不同 session 的玩家混淆
+                const key = sessionId ? `bingo_participants_${sessionId}` : 'bingo_participants';
+                localStorage.setItem(key, JSON.stringify(participants));
             },
             
-            loadParticipants: () => {
-                return JSON.parse(localStorage.getItem('bingo_participants') || '{}');
+            loadParticipants: (sessionId = null) => {
+                // 按 Session ID 加載對應的玩家列表
+                const key = sessionId ? `bingo_participants_${sessionId}` : 'bingo_participants';
+                return JSON.parse(localStorage.getItem(key) || '{}');
             }
         },
 
@@ -774,8 +779,8 @@
                     participants: App.State.participants
                 });
                 
-                // 保存玩家列表（分開存儲以便跨分頁監聽）
-                App.Storage.saveParticipants(App.State.participants);
+                // 保存玩家列表（按 Session ID 分開存儲）
+                App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
                 
                 // 保存當前用戶的遊戲數據
                 if (App.State.currentUser && App.State.participants[App.State.currentUser]) {
@@ -849,12 +854,15 @@
                         }
                     }
                     
-                    // 監聽玩家列表變化
-                    if (event.key === 'bingo_participants') {
-                        const remoteParticipants = JSON.parse(event.newValue || '{}');
-                        if (JSON.stringify(remoteParticipants) !== JSON.stringify(App.State.participants)) {
-                            App.State.participants = remoteParticipants;
-                            App.Actions.updatePlayersList();
+                    // 監聽玩家列表變化（按 Session ID 分開的鑰匙）
+                    if (event.key && event.key.startsWith('bingo_participants_')) {
+                        // 只更新當前 session 的玩家列表
+                        if (App.State.gameSessionId && event.key === `bingo_participants_${App.State.gameSessionId}`) {
+                            const remoteParticipants = JSON.parse(event.newValue || '{}');
+                            if (JSON.stringify(remoteParticipants) !== JSON.stringify(App.State.participants)) {
+                                App.State.participants = remoteParticipants;
+                                App.Actions.updatePlayersList();
+                            }
                         }
                     }
                 });
@@ -896,8 +904,22 @@
                     return;
                 }
                 
-                // 加入指定的遊戲會話
-                App.Actions.loginAsUser(username, sessionId);
+                // 如果 Firebase 已初始化，先驗證 session 是否存在
+                if (firebaseInitialized && db) {
+                    db.ref(`games/${sessionId}`).once('value', (snapshot) => {
+                        if (snapshot.exists()) {
+                            console.log('✅ 會話驗證成功 - 已連接到遠端遊戲');
+                            App.Actions.loginAsUser(username, sessionId);
+                        } else {
+                            console.log('⚠️ Firebase 中無此會話，但會創建新的遠端會話');
+                            App.Actions.loginAsUser(username, sessionId);
+                        }
+                    });
+                } else {
+                    // Firebase 未初始化時的警告提示
+                    alert('⚠️ 提示：Firebase 未初始化，跨瀏覽器同步功能可能受限\n\n如需跨瀏覽器同步，請確保在聯網環境下使用');
+                    App.Actions.loginAsUser(username, sessionId);
+                }
             },
             
             loginAsUser: (username, sessionId = null) => {
@@ -910,8 +932,8 @@
                 localStorage.setItem('bingo_session_id', App.State.gameSessionId);
                 App.Storage.saveUser(username);
                 
-                // 加載所有玩家列表（包括其他分頁的玩家）
-                const allParticipants = App.Storage.loadParticipants();
+                // 加載此 Session 的玩家列表（必須傳入 sessionId）
+                const allParticipants = App.Storage.loadParticipants(App.State.gameSessionId);
                 if (Object.keys(allParticipants).length > 0) {
                     App.State.participants = allParticipants;
                 }
@@ -943,18 +965,22 @@
                             // 合併 Firebase 的玩家與本地玩家（本地的會覆蓋 Firebase 的同名玩家）
                             App.State.participants = { ...firebaseParticipants, ...App.State.participants };
                         }
-                        // 保存更新後的玩家列表到 localStorage
-                        App.Storage.saveParticipants(App.State.participants);
+                        // 保存更新後的玩家列表到 localStorage（傳入 sessionId）
+                        App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
                         // 上傳合併後的完整玩家列表到 Firebase
                         App.Firebase.syncToCloud(App.State.gameSessionId);
+                        // 延遲 100ms 後重新渲染玩家列表，確保 UI 能顯示從 Firebase 加載的玩家
+                        setTimeout(() => {
+                            App.Actions.updatePlayersList();
+                        }, 100);
                     });
                     
                     // 設置實時監聽（用於後續的實時更新）
                     App.Firebase.listenToGameChanges(App.State.gameSessionId);
                     App.Firebase.listenToPlayers(App.State.gameSessionId);
                 } else {
-                    // 如果沒有 Firebase，只保存到 localStorage
-                    App.Storage.saveParticipants(App.State.participants);
+                    // 如果沒有 Firebase，只保存到 localStorage（傳入 sessionId）
+                    App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
                 }
                 
                 App.UI.showGameView();
@@ -986,8 +1012,12 @@
                 // 從參與者列表中移除當前玩家
                 if (App.State.currentUser && App.State.participants[App.State.currentUser]) {
                     delete App.State.participants[App.State.currentUser];
-                    // 保存更新後的列表（觸發其他分頁同步）
-                    App.Storage.saveParticipants(App.State.participants);
+                    // 保存更新後的列表（觸發其他分頁和其他瀏覽器的同步）
+                    App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
+                    // 同步到雲端
+                    if (firebaseInitialized) {
+                        App.Firebase.syncToCloud(App.State.gameSessionId);
+                    }
                 }
                 
                 // 清除當前玩家的 sessionStorage（但保留 localStorage 的 sessionId）
@@ -1048,8 +1078,8 @@
                 const playersContainer = document.getElementById('playersContainer');
                 const playerCount = document.getElementById('playerCount');
                 
-                // 從 localStorage 重新讀取最新的玩家列表（確保同步其他分頁的變化）
-                const latestParticipants = App.Storage.loadParticipants();
+                // 從 localStorage 重新讀取最新的玩家列表（確保同步其他分頁和其他瀏覽器的變化）
+                const latestParticipants = App.Storage.loadParticipants(App.State.gameSessionId);
                 if (Object.keys(latestParticipants).length > 0) {
                     App.State.participants = latestParticipants;
                 }
@@ -1150,8 +1180,8 @@
                     participants: App.State.participants
                 });
                 
-                // 保存玩家列表
-                App.Storage.saveParticipants(App.State.participants);
+                // 保存玩家列表（按 Session ID 分開）
+                App.Storage.saveParticipants(App.State.participants, App.State.gameSessionId);
                 
                 App.Core.syncGameState();
                 
